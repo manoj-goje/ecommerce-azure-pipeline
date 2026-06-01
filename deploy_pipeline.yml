@@ -1,0 +1,80 @@
+# =============================================================================
+# .github/workflows/deploy_pipeline.yml
+# CI/CD — Deploy Databricks notebooks to Dev & Prod on push
+# =============================================================================
+
+name: Deploy E-Commerce Pipeline
+
+on:
+  push:
+    branches:
+      - main          # triggers prod deploy
+      - develop       # triggers dev deploy
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2. Set up Python
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      # 3. Install Databricks CLI
+      - name: Install Databricks CLI
+        run: pip install databricks-cli
+
+      # 4. Configure Databricks CLI (uses GitHub Secrets)
+      - name: Configure Databricks CLI
+        run: |
+          databricks configure --token <<EOF
+          ${{ secrets.DATABRICKS_HOST }}
+          ${{ secrets.DATABRICKS_TOKEN }}
+          EOF
+
+      # 5. Deploy notebooks to Dev workspace
+      - name: Deploy notebooks to Dev
+        if: github.ref == 'refs/heads/develop'
+        run: |
+          databricks workspace import_dir notebooks/ /Shared/ecommerce-pipeline/dev \
+            --overwrite \
+            --exclude-hidden-files
+
+      # 6. Deploy notebooks to Prod workspace
+      - name: Deploy notebooks to Prod
+        if: github.ref == 'refs/heads/main'
+        run: |
+          databricks workspace import_dir notebooks/ /Shared/ecommerce-pipeline/prod \
+            --overwrite \
+            --exclude-hidden-files
+
+      # 7. Run a quick smoke test on Dev (optional)
+      - name: Run smoke test on Dev cluster
+        if: github.ref == 'refs/heads/develop'
+        run: |
+          databricks runs submit \
+            --json '{
+              "run_name": "smoke-test-bronze",
+              "existing_cluster_id": "${{ secrets.DEV_CLUSTER_ID }}",
+              "notebook_task": {
+                "notebook_path": "/Shared/ecommerce-pipeline/dev/01_bronze_ingestion",
+                "base_parameters": {
+                  "storage_account": "${{ secrets.DEV_STORAGE_ACCOUNT }}",
+                  "container": "ecommerce-raw",
+                  "bronze_path": "/mnt/bronze"
+                }
+              }
+            }'
+
+      # 8. Notify on success
+      - name: Deployment complete
+        run: echo "✅ Pipeline deployed successfully to ${{ github.ref_name }} environment"
